@@ -405,7 +405,7 @@ void scrypt_core(uint32_t *X, uint32_t *V, int N);
 #elif defined(USE_ASM) && defined(__arm__) && defined(__APCS_32__)
 
 void scrypt_core(uint32_t *X, uint32_t *V, int N);
-#if defined(__ARM_NEON__)
+#if defined(__ARM_NEON)
 #undef HAVE_SHA256_4WAY
 #define SCRYPT_MAX_WAYS 3
 #define HAVE_SCRYPT_3WAY 1
@@ -1768,7 +1768,13 @@ static inline void scrypt_core(uint32_t *X, uint32_t *V, int N)
 #define scrypt_best_throughput() 1
 #endif
 
+pthread_mutex_t alloc_mutex = PTHREAD_MUTEX_INITIALIZER;
 bool printed = false;
+bool tested_hugepages = false;
+bool disable_hugepages = false;
+int hugepages_successes = 0;
+int hugepages_fails = 0;
+int hugepages_size_failed = 0;
 unsigned char *scrypt_buffer_alloc(int N, int forceThroughput)
 {
 	uint32_t throughput = (forceThroughput == -1 ? scrypt_best_throughput() : forceThroughput);
@@ -1780,20 +1786,124 @@ unsigned char *scrypt_buffer_alloc(int N, int forceThroughput)
 	uint32_t size = throughput * 32 * (N + 1) * sizeof(uint32_t);
 
 #ifdef __linux__
-	unsigned char* m_memory = (unsigned char*)(mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, 0, 0));
-	if (m_memory == MAP_FAILED)
+	pthread_mutex_lock(&alloc_mutex);
+	if (!tested_hugepages)
 	{
-		if( !printed)
+		FILE* f = fopen("/sys/kernel/mm/transparent_hugepage/enabled", "r");
+		if (f)
 		{
-			printf("HugePages unavailable (%d)\n", errno);
-			printed = true;
+			char buff[32];
+			fread(buff, 32, 1, f);
+			fclose(f);
+			if (strstr(buff, "[always]") != NULL)
+			{
+				applog(LOG_DEBUG, "HugePages type: transparent_hugepages\n");
+				disable_hugepages = true;
+			}
 		}
+		else
+		{
+		}
+		tested_hugepages = true;
 	}
-	if (m_memory == MAP_FAILED)
+	pthread_mutex_unlock(&alloc_mutex);
+
+	if (!disable_hugepages)
 	{
-		m_memory = (unsigned char*)malloc(size);
+		unsigned char* m_memory = (unsigned char*)(mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_POPULATE, 0, 0));
+		if (m_memory == MAP_FAILED)
+		{
+			pthread_mutex_lock(&alloc_mutex);
+			hugepages_fails++;
+			hugepages_size_failed += ((size / (2 * 1024 * 1024)) + 1);
+			if( hugepages_successes == 0)
+			{
+				if (!printed)
+				{
+					applog(LOG_DEBUG, "HugePages unavailable (%d)\n", errno);
+					printed = true;
+				}
+			}
+			else
+			{
+				applog(LOG_INFO, "HugePages too small! (%d success, %d fail)\n\tNeed at most %d more hugepages\n", hugepages_successes, hugepages_fails, hugepages_size_failed);
+			}
+			pthread_mutex_unlock(&alloc_mutex);
+			m_memory = (unsigned char*)malloc(size);
+		}
+		else
+		{
+			pthread_mutex_lock(&alloc_mutex);
+			if (!printed)
+			{
+				printed = true;
+				applog(LOG_DEBUG, "HugePages type: preallocated\n");
+			}
+			hugepages_successes++;
+			pthread_mutex_unlock(&alloc_mutex);
+		}
+		return m_memory;
 	}
-	return m_memory;
+	else
+	{
+		return (unsigned char*)malloc(size);
+	}
+#elif defined(WIN32)
+
+	pthread_mutex_lock(&alloc_mutex);
+	if (!tested_hugepages)
+	{
+		tested_hugepages = true;
+		
+		HANDLE           hToken;
+		TOKEN_PRIVILEGES tp;
+		BOOL             status;
+
+		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+			disable_hugepages = true;
+
+		if (!disable_hugepages && !LookupPrivilegeValue(NULL, TEXT("SeLockMemoryPrivilege"), &tp.Privileges[0].Luid))
+			disable_hugepages = true;
+
+		if (!disable_hugepages)
+		{
+			tp.PrivilegeCount = 1;
+			tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+			status = AdjustTokenPrivileges(hToken, FALSE, &tp, 0, (PTOKEN_PRIVILEGES)NULL, 0);
+		}
+
+		if (disable_hugepages || (!status || (GetLastError() != ERROR_SUCCESS)))
+		{
+			applog(LOG_DEBUG, "HugePages: not enabled, view readme for more info!");
+			disable_hugepages = true;
+		}
+
+		CloseHandle(hToken);
+	}
+	pthread_mutex_unlock(&alloc_mutex);
+
+	if (tested_hugepages && !disable_hugepages)
+	{   
+		int size = N * scrypt_best_throughput() * 128;
+		SIZE_T iLargePageMin = GetLargePageMinimum();
+		if (size < iLargePageMin)
+			size = iLargePageMin;
+
+		unsigned char *scratchpad = VirtualAllocEx(GetCurrentProcess(), NULL, size, MEM_RESERVE | MEM_COMMIT | MEM_LARGE_PAGES, PAGE_READWRITE);
+		if (!scratchpad)
+		{
+			applog(LOG_ERR, "Large page allocation failed.");
+			scratchpad = VirtualAllocEx(GetCurrentProcess(), NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+		}
+
+		return scratchpad;
+	}
+	else
+	{
+		return (unsigned char*)malloc(size);
+	}
+
 #else
 	return (unsigned char*)malloc(size);
 #endif

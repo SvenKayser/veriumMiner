@@ -119,7 +119,8 @@ int opt_n_default_threads = 0;
 int opt_n_oneway_threads = 0;
 int opt_n_total_threads = 0;
 int use_affinity_mask = 0; // default to 'maybe'
-int64_t opt_affinity_mask = 0L;
+int64_t opt_affinity_mask_default = 0L;
+int64_t opt_affinity_mask_oneway = 0L;
 int opt_default_priority = 0;
 int opt_affinity_stride = 1;
 int opt_affinity_default_index = 0;
@@ -164,7 +165,7 @@ uint32_t solved_count = 0L;
 uint32_t accepted_count = 0L;
 uint32_t rejected_count = 0L;
 double *thr_hashrates;
-uint64_t global_hashrate = 0;
+double global_hashrate = 0;
 double stratum_diff = 0.;
 double net_diff = 0.;
 double net_hashrate = 0.;
@@ -179,6 +180,9 @@ uint32_t opt_work_size = 0; /* default */
 char *opt_api_allow = NULL;
 int opt_api_remote = 0;
 int opt_api_listen = 4048; /* 0 to disable */
+
+unsigned long hash_time = 0;
+unsigned int opt_hash_time_delay = 30; //30 seconds
 
 #ifdef HAVE_GETOPT_LONG
 #include <getopt.h>
@@ -280,6 +284,7 @@ static struct option const options[] = {
 	{ "cpu-affinity", 1, NULL, 1020 },
 	{ "cpu-priority", 1, NULL, 1021 },
 	{ "cpu-priority-oneway", 1, NULL, 1022 },
+	{ "cpu-affinity-oneway", 1, NULL, 1023 },
 	{ "cpu-affinity-stride", 1, NULL, 1050 },
 	{ "cpu-affinity-default-index", 1, NULL, 1051 },
 	{ "cpu-affinity-oneway-index", 1, NULL, 1052 },
@@ -854,7 +859,7 @@ static int share_result(int result, struct work *work, const char *reason)
 	result ? accepted_count++ : rejected_count++;
 	pthread_mutex_unlock(&stats_lock);
 
-	global_hashrate = (uint64_t) hashrate;
+	global_hashrate = hashrate;
 
 	if (!net_diff || sharediff < net_diff) {
 		flag = use_colors ?
@@ -872,14 +877,11 @@ static int share_result(int result, struct work *work, const char *reason)
 	else // accepted percent
 		sprintf(suppl, "%.2f%%", 100. * accepted_count / (accepted_count + rejected_count));
 
-	switch (opt_algo) {
-	default:
-		sprintf(s, hashrate >= 1e6 ? "%.0f" : "%.2f", hashrate / 1000.0);
+	//print accepted hash and accompanying info
+		sprintf(s, hashrate >= 1e6 ? "%.0f" : "%.5f", hashrate / 1000.0);
 		applog(LOG_NOTICE, "accepted: %lu/%lu (%s), %s kH/s %s",
 			accepted_count, accepted_count + rejected_count,
 			suppl, s, flag);
-		break;
-	}
 
 	if (reason) {
 		applog(LOG_WARNING, "reject reason: %s", reason);
@@ -1621,18 +1623,33 @@ static void *miner_thread(void *userdata)
 				"Use --cpu-affinity-stride + --cpu-affinity-default-index.");
 		}
 
-		if (use_affinity_mask != -1) {
-			if (opt_affinity_mask == -1 && opt_n_total_threads > 1) {
-				if (opt_debug)
-					applog(LOG_DEBUG, "Binding thread %d to cpu %d (mask %x)", thr_id, thr_id % num_cpus, (1 << (thr_id % num_cpus)));
-				affine_to_cpu_mask(thr_id, 1UL << (thr_id % num_cpus));
-			} else if (opt_affinity_mask != -1L) {
-				if (opt_debug)
-					applog(LOG_DEBUG, "Binding thread %d to cpu mask %x", thr_id, opt_affinity_mask);
-				affine_to_cpu_mask(thr_id, (unsigned long)opt_affinity_mask);
+		if (use_affinity_mask == 1) {
+			if (thr_id >= opt_n_default_threads)
+			{
+				if (opt_affinity_mask_oneway == -1 && opt_n_total_threads > 1) {
+					if (opt_debug)
+						applog(LOG_DEBUG, "Binding onway thread %d to cpu %d (mask %x)", thr_id, thr_id % num_cpus, (1 << (thr_id % num_cpus)));
+					affine_to_cpu_mask(thr_id, 1UL << (thr_id % num_cpus));
+				} else if (opt_affinity_mask_oneway != -1L) {
+					if (opt_debug)
+						applog(LOG_DEBUG, "Binding oneway thread %d to cpu mask %x", thr_id, opt_affinity_mask_oneway);
+					affine_to_cpu_mask(thr_id, (unsigned long)opt_affinity_mask_oneway);
+				}
+			}
+			else
+			{
+				if (opt_affinity_mask_default == -1 && opt_n_total_threads > 1) {
+					if (opt_debug)
+						applog(LOG_DEBUG, "Binding thread %d to cpu %d (mask %x)", thr_id, thr_id % num_cpus, (1 << (thr_id % num_cpus)));
+					affine_to_cpu_mask(thr_id, 1UL << (thr_id % num_cpus));
+				} else if (opt_affinity_mask_default != -1L) {
+					if (opt_debug)
+						applog(LOG_DEBUG, "Binding thread %d to cpu mask %x", thr_id, opt_affinity_mask_default);
+					affine_to_cpu_mask(thr_id, (unsigned long)opt_affinity_mask_default);
+				}
 			}
 		}
-		else if (use_affinity_mask == -1) {
+		else if (use_affinity_mask != 0) {
 			#ifndef __linux__
 				if (num_cpus > 64 && use_affinity_mask == 1) {
 					applog(LOG_WARNING, "NUMBER OF CPUS IS GREATER THAN 64, --cpu-affinity will be wrong!\n"
@@ -1654,15 +1671,13 @@ static void *miner_thread(void *userdata)
 
 		}
 	}
-
-	if (opt_algo == ALGO_SCRYPT) {
+	
 		scratchbuf = scrypt_buffer_alloc(opt_scrypt_n, mythr->forceThroughput);
 		if (!scratchbuf) {
 			applog(LOG_ERR, "scrypt buffer allocation failed");
 			pthread_mutex_lock(&applog_lock);
 			exit(1);
 		}
-	}
 
 	while (1) {
 		uint64_t hashes_done;
@@ -1760,7 +1775,7 @@ static void *miner_thread(void *userdata)
 				}
 				if (opt_benchmark) {
 					char rate[32];
-					format_hashrate((double)global_hashrate, rate);
+					format_hashrate(global_hashrate, rate);
 					applog(LOG_NOTICE, "Benchmark: %s", rate);
 					fprintf(stderr, "%llu\n", (long long unsigned int) global_hashrate);
 				} else {
@@ -1815,18 +1830,19 @@ static void *miner_thread(void *userdata)
                 hashes_done / (diff.tv_sec + diff.tv_usec * 1e-6);
 			pthread_mutex_unlock(&stats_lock);
 		}
-        if (thr_id == opt_n_total_threads - 1) {
+        if (thr_id == opt_n_total_threads - 1 && (unsigned long)time(NULL) > hash_time) {
+			hash_time = (unsigned long)time(NULL) + (unsigned long)opt_hash_time_delay;
 			double hashrate = 0.;
 			for (i = 0; i < opt_n_total_threads && thr_hashrates[i]; i++)
 				hashrate += thr_hashrates[i];
 			if (i == opt_n_total_threads) {
 				switch(opt_algo) {
 				default:
-                    sprintf(s, hashrate >= 1e6 ? "%.0f" : "%.2f", hashrate * 60);
+                    sprintf(s, hashrate >= 1e6 ? "%.0f" : "%.3f", hashrate * 60);
                     applog(LOG_NOTICE, "Total: %s H/m", s);
 					break;
 				}
-				global_hashrate = (uint64_t) hashrate;
+				global_hashrate = hashrate;
 			}
 		}
 
@@ -2158,7 +2174,7 @@ static void show_version_and_exit(void)
 	// Note: if compiled with cpu opts (instruction sets),
 	// the binary is no more compatible with older ones!
 	printf(" compiled for"
-#if defined(__ARM_NEON__)
+#if defined(__ARM_NEON)
 		" ARM NEON"
 #elif defined(__AVX2__)
 		" AVX2"
@@ -2170,17 +2186,12 @@ static void show_version_and_exit(void)
 		" SSE4"
 #elif defined(_M_X64) || defined(__x86_64__)
 		" x64"
-#elif defined(_M_IX86) || defined(__x86__)
-		" x86"
 #else
 		" general use"
 #endif
 		"\n");
 
 	printf(" config features:"
-#if defined(USE_ASM) && defined(__i386__)
-		" i386"
-#endif
 #if defined(USE_ASM) && defined(__x86_64__)
 		" x86_64"
 #endif
@@ -2208,12 +2219,12 @@ static void show_version_and_exit(void)
 	defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__)
 		" ARMv5E"
 #endif
-#if defined(__ARM_NEON__)
+#if defined(__ARM_NEON)
 		" NEON"
+#endif
 #endif
 #if defined(__aarch64__)
 		" ARMV8 NEON"
-#endif
 #endif
 		"\n\n");
 	/* dependencies versions */
@@ -2252,9 +2263,6 @@ void parse_arg(int key, char *arg)
 	//printf("%d - %c - arg\n", key, key);
 
 	switch(key) {
-		if (!opt_nfactor && opt_algo == ALGO_SCRYPT)
-            opt_nfactor = 19;
-		break;
 	case 'b':
 		p = strstr(arg, ":");
 		if (p) {
@@ -2529,7 +2537,23 @@ void parse_arg(int key, char *arg)
 			ul = atol(arg);
 		if (ul > (1UL<<num_cpus)-1)
 			ul = -1;
-		opt_affinity_mask = ul;
+		opt_affinity_mask_default = ul;
+		use_affinity_mask = 1;
+		break;
+	case 1023: // '--cpu-affinity-oneway'
+		if (use_affinity_mask == -1){
+			applog(LOG_ERR, "BOTH --cpu-affinity and --cpu-affinity-stride have been defined!  Pick one or the other!");
+			show_usage_and_exit(1);
+		}
+
+		p = strstr(arg, "0x");
+		if (p)
+			ul = strtoul(p, NULL, 16);
+		else
+			ul = atol(arg);
+		if (ul > (1UL<<num_cpus)-1)
+			ul = -1;
+		opt_affinity_mask_oneway = ul;
 		use_affinity_mask = 1;
 		break;
 	case 1021:
@@ -2669,7 +2693,6 @@ static void parse_cmdline(int argc, char *argv[])
 			argv[0], argv[optind]);
 		show_usage_and_exit(1);
 	}
-	printf("cmdline parsed\n");
 }
 
 #ifndef WIN32
@@ -2719,7 +2742,8 @@ static int thread_create(struct thr_info *thr, void* func)
 
 static void show_credits()
 {
-    printf("\n Verium Miner forked from " PACKAGE_NAME " " PACKAGE_VERSION " by tpruvot@github **\n\n");
+    printf("\n Verium Miner forked from " PACKAGE_NAME " " PACKAGE_VERSION " by fireworm@github **");
+    printf("\n              credits to tpruvot et al. & effectsToCause et al. **\n\n");
 }
 
 void get_defconfig_path(char *out, size_t bufsize, char *argv0);
@@ -2855,17 +2879,17 @@ int main(int argc, char *argv[]) {
 		SetPriorityClass(GetCurrentProcess(), prio);
 	}
 #endif
-	if (opt_affinity_mask != -1 && opt_affinity_mask != 0 && use_affinity_mask == 1) {
+	if (opt_affinity_mask_default != -1 && opt_affinity_mask_default != 0 && use_affinity_mask == 1) {
 		if (!opt_quiet)
-			applog(LOG_DEBUG, "Binding process to cpu mask %x", opt_affinity_mask);
-		affine_to_cpu_mask(-1, (unsigned long)opt_affinity_mask);
+			applog(LOG_DEBUG, "Binding process to cpu mask %x", opt_affinity_mask_default | opt_affinity_mask_oneway);
+		affine_to_cpu_mask(-1, (unsigned long)(opt_affinity_mask_default | opt_affinity_mask_oneway) );
 	}
 
 #ifdef HAVE_SYSLOG_H
 	if (use_syslog)
 		openlog("cpuminer", LOG_PID, LOG_USER);
 #endif
-	if (use_affinity_mask == -1) {
+	if (use_affinity_mask != 1) {
 		thread_affinty_array = calloc(opt_n_total_threads, sizeof(int));
 		// threads ids are allocated in this order, so do affinity in this order too.
 		// [default way threads] [one way threads]
@@ -2884,7 +2908,8 @@ int main(int argc, char *argv[]) {
 			else {
 				type = "one way";
 			}
-			applog(LOG_DEBUG, "Thread %d (%s) bound to CPU #%d", i, type, thread_affinty_array[i]);
+			if (opt_debug)
+				applog(LOG_DEBUG, "Thread %d (%s) bound to CPU #%d", i, type, thread_affinty_array[i]);
 		}
 	}
 
@@ -2992,7 +3017,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	applog(LOG_INFO, "%d miner threads started, "
-		"using '%s' algorithm.",
+		"using scrypt algorithm.",
 		opt_n_total_threads,
 		algo_names[opt_algo]);
 

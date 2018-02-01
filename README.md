@@ -4,17 +4,51 @@ veriumMiner
 This is a multi-threaded CPU miner for Verium using scrypt²,
 fork of [tpruvot](//github.com/tpruvot)'s cpuminer-multi (see AUTHORS for list of contributors).
 
+# [Latest Binaries here](https://github.com/fireworm71/veriumMiner/releases/latest)
+
 #### Table of contents
 
-* [Dependencies](#dependencies)
+* [Overview](#overview)
 * [Download](#download)
+* [Dependencies](#dependencies)
 * [Build](#build)
 * [Usage instructions](#usage-instructions)
+  * [HugePages Linux](#hugepages-linux)
+  * [HugePages Windows](#hugepages-windows)
 * [Donations](#donations)
 * [GCC 7.2](#gcc)
 * [Credits](#credits)
 * [License](#license)
 
+Overview
+========
+To use this miner, you can do one of the following:
+* Grab a precompiled exe [here](https://github.com/fireworm71/veriumMiner/releases/latest).
+* Build from source: Easy:
+  ```
+  [install dependencies for your os]
+  git clone https://github.com/fireworm71/veriumMiner
+  cd veriumMiner
+  ./build.sh
+  ./cpuminer ...
+  ```
+* Build from source: Advanced:
+  ```
+  [install dependencies for your os]
+  git clone https://github.com/fireworm71/veriumMiner
+  cd veriumMiner
+  ./autogen.sh
+  perl nomacro.pl
+  ./configure CFLAGS="-O2" --with-curl --with-crypto
+  make clean && make
+  ./cpuminer ...
+  ```
+
+Download
+========
+ * Git tree:   https://github.com/fireworm71/veriumMiner
+ * Clone with `git clone https://github.com/fireworm71/veriumMiner`
+ * [Latest Binaries here](https://github.com/fireworm71/veriumMiner/releases/latest)
 
 Dependencies
 ============
@@ -24,37 +58,27 @@ Dependencies
  * pthreads
  * zlib (for curl/ssl)
 
-Download
-========
- * Git tree:   https://github.com/fireworm71/veriumMiner
- * Clone with `git clone https://github.com/fireworm71/veriumMiner`
+ * Ubuntu / Debian: 
+  * `apt-get install automake autoconf pkg-config libcurl4-openssl-dev libjansson-dev libssl-dev libgmp-dev zlib1g-dev`
+ * FreeBSD:
+  * `pkg install automake autoconf git`
+  * Build libcurl by compiling and installing the curl port
+    `cd /usr/ports/ftp/curl; make install`
 
 Build
 =====
 
 #### Basic *nix build instructions:
- * just use ./build.sh
-_OR_
+ * After dowloading dependencies: `./build.sh`
+
+#### If you are fancy,
  * ./autogen.sh	# only needed if building from git repo
  * ./nomacro.pl	# only needed if building on Mac OS X or with Clang
- * ./configure CFLAGS="*-march=native*" --with-crypto --with-curl
-   * # Use -march=native if building for a single machine
+ * ./configure CFLAGS="-march=native" --with-crypto --with-curl
  * make
 
-#### Note for Debian/Ubuntu users:
- * `apt-get install automake autoconf pkg-config libcurl4-openssl-dev libjansson-dev libssl-dev libgmp-dev zlib1g-dev`
-
-#### Notes for FreeBSD users:
- * Install Dependencies: 
-`pkg install automake autoconf git`
-
- * Build libcurl by compiling and installing the curl port
-`cd /usr/ports/ftp/curl; make install`
-
- * Now checkout and build the cpuminer binary
+#### FreeBSD users:
 ```
-   git clone https://github.com/fireworm71/veriumMiner.git
-   cd veriumMiner
    export C_INCLUDE_PATH=$INCLUDE_PATH:/usr/local/include
    export CPLUS_INCLUDE_PATH=$INCLUDE_PATH:/usr/local/include
    export LIBRARY_PATH=$LIBRARY_PATH:/usr/local/lib
@@ -68,31 +92,44 @@ _OR_
  * To build a 64-bit binary, export OBJECT_MODE=64
  * GNU-style long options are not supported, but are accessible via configuration file
 
-#### Basic Windows build with Visual Studio 2013
- * All the required .lib files are now included in tree (windows only)
- * AVX enabled by default for x64 platform (AVX2 and XOP could also be used)
-
 #### Basic Windows build instructions, using MinGW64:
- * Install MinGW64 and the MSYS Developer Tool Kit (http://www.mingw.org/)
-   * Make sure you have mstcpip.h in MinGW\include
- * install pthreads-w64
- * Install libcurl devel (http://curl.haxx.se/download.html)
-   * Make sure you have libcurl.m4 in MinGW\share\aclocal
-   * Make sure you have curl-config in MinGW\bin
- * Install openssl devel (https://www.openssl.org/related/binaries.html)
- * In the MSYS shell, run:
-   * for 64bit, you can use ./mingw64.sh else :
-     ./autogen.sh	# only needed if building from git repo
-   * LIBCURL="-lcurldll" ./configure CFLAGS="*-march=native*"
-     * # Use -march=native if building for a single machine
-   * make
+ * Install MSYS 2 64bit
+ * Open the MSYS2 64bit Shell
+
+```
+Pacman -Syu
+```
+
+ * Kill Terminal with taskmanager & reopen
+
+```
+pacman -Sy mingw-w64-x86_64-gcc
+pacman -Sy make
+pacman -Sy automake
+pacman -Sy autoconf
+
+pacman -Sy mingw-w64-x86_64-curl
+pacman -Sy curl libcurl libcurl-devel mingw-w64-x86_64-curl mingw-w64-x86_64-libwinpthread-git libopenssl openssl openssl-devel
+```
+
+ * Download
+https://netix.dl.sourceforge.net/project/ezwinports/make-4.2.1-without-guile-w32-bin.zip
+
+ * Copy everything in C:\msys64\mingw64 without replacing anything
+ * Download and extract the Miner from Git, place it in C:\msys64
+ * Open MSYS2 MinGW64 Shell:
+```
+cd /veriumMiner-main
+./mingw64.sh
+```
+ * If deploying to another computer, you will also need to copy: `libeay32.dll`, `libjansson-4.dll`, and `libwinpthread-1.dll` from the `C:\msys64\mingw64\bin` folder, as well as `cpuminer.exe`.
 
 #### Architecture-specific notes:
  * ARMv8:
    * Neon is enabled by default, ./build.sh should work fine.
  * ARMv7:
    * No runtime CPU detection. The miner can take advantage of some instructions specific to ARMv5E and later processors, but the decision whether to use them is made at compile time, based on compiler-defined macros.
-   * To use NEON instructions, add "-mfpu=neon" to CFLAGS.
+   * To use NEON instructions, add `-mfpu=neon` to CFLAGS.
  * x86:
    * The miner checks for SSE2 instructions support at runtime, and uses them if they are available.
  * x86-64:	
@@ -107,16 +144,40 @@ Usage instructions
 ==================
 Run "cpuminer --help" to see options.
 
-### HugePages (Linux only)
-Linux provides a nice optimization (+10% - +50% gains) that enables faster memory lookups.  These are 'HugePages'.  HugePages preallocate a bunch of memory for 'a specific use', in this case, for the miner.  
+### HugePages 
+HugePages allow for faster memory lookups, which is very important for this miner.  Enabling HugePages typically gets 10% or more performance.
 
-To enable them (on Ubuntu 16.04), first check that you have `/proc/sys/vm/nr_hugepages` by doing `ls /proc/sys/vm` (you should see `nr_hugepages` in the print out).  
+#### HugePages (Linux)
+To make matters complicated, there are two ways of doing this.  One is `transparent_hugepages` one is `preallocated`.  Even more complicated, one is sometimes faster than the other.
 
-You can allocate huge pages by doing one of two things:
-1) `sudo nano /etc/sysctl.conf`, scroll to the bottom, and type in `vm.nr_hugepages=size`, then `Ctrl+O`, then `[Enter]`, then `Ctrl+X`.
-2) `echo "vm.nr_hugepages=size" > sudo tee --append /etc/sysctl.conf`.
+**This miner will use `transparent_hugepages` by default.**
 
-After either, do `sudo sysctl -p`.  You should see `vm.nr_hugepages=size` print out on the console.  If not, check your distro.  You may need to recompile your kernel to enable this.  You can also verify that memory is allocated by running `free` and seeing that you now have a ton of memory allocated, but aren't running anything that's using it.
+To enable `transparent_hugepages`, (on Ubuntu 16.04):
+`echo always | sudo tee /sys/kernel/mm/transparent_hugepage/enabled`
+
+To disable `transparent_hugepages`, (on Ubuntu 16.04):
+`echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled`
+
+To verify the status of `transparent_hugepages`
+`cat /sys/kernel/mm/transparent_hugepage/enabled`  (`[]` will show around the current status).
+
+To enable `preallocated` hugepages (on Ubuntu 16.04), first check that you have `/proc/sys/vm/nr_hugepages` by doing `ls /proc/sys/vm` (you should see `nr_hugepages` in the print out).  Then,
+1. `sudo nano /etc/sysctl.conf`, 
+2. scroll to the bottom, 
+3. type in `vm.nr_hugepages=size`
+4. `Ctrl+O`, then `[Enter]`, then `Ctrl+X`.
+5. `sudo sysctl -p`
+
+To disable:
+1. `sudo nano /etc/sysctl.conf`, 
+2. scroll to the bottom, 
+3. remove the line `vm.nr_hugepages=size`
+4. `Ctrl+O`, then `[Enter]`, then `Ctrl+X`.
+5. `sudo sysctl -p`
+
+Note that you can also reboot and this will cause HugePages to allocate / deallocate.
+
+When enabling, you should see `vm.nr_hugepages=size` print out on the console.  If not, check your distro.  You may need to recompile your kernel to enable this.  You can also verify that memory is allocated by running `free` and seeing that you now have a ton of memory allocated, but aren't running anything that's using it.
 
 `size` = (the amount of memory each miner thread needs) / (2048 * 1024).  
 
@@ -128,16 +189,26 @@ How much memory is be used per thread?
 * ARMv7 (3way) : 384MB -> nr_hugepages = 193.
 * ARMv8 (3way) : 384MB -> nr_hugepages = 193.
 
-For example, 4 threads on an SSE4, you'd type `echo "vm.nr_hugepages=772" > sudo tee --append /etc/sysctl.conf`
-
 Multiply that number by the number of threads, and you will have the size needed.  Note, you may not have enough RAM for this on ARM SoCs.  The miner should still work, but it will not be as optimal. 
 
-How can you tell you have enough HugePages?
-You will not see `HugePages unavailable (##)` print out.  That means you have successfully allocated all needed HugePages for the miner.
+For example, 4 threads on an SSE4, you'd type `vm.nr_hugepages=772`.  Since 4 (threads) * 193 (hugepages per thread) = 772.
 
-If for some reason you want to remove HugePages (or adjust the size):
 
-`sudo nano /etc/sysctl.conf`, scroll to the bottom, and remove / edit the line `vm.nr_hugepages=size`, `Ctrl+O`, `[Enter]`, `Ctrl+X`.  Then, like before, `sudo sysctl -p`.  Note that you can also reboot and this will cause HugePages to allocate / deallocate.
+#### HugePages (Windows)
+
+ * You need to run the miner with "Run As Administrator" on Windows.
+ * You need to edit your system's group policies to enable locking large pages. Here are the steps from MSDN: 
+
+ 1. On the Start menu, click Run. In the Open box, type gpedit.msc.
+ 2. On the Local Group Policy Editor console, expand Computer Configuration, and then expand Windows Settings.
+ 3. Expand Security Settings, and then expand Local Policies.
+ 4. Select the User Rights Assignment folder.
+ 5. The policies will be displayed in the details pane.
+ 6. In the pane, double-click Lock pages in memory.
+ 7. In the Local Security Setting – Lock pages in memory dialog box, click Add User or Group.
+ 8. In the Select Users, Service Accounts, or Groups dialog box, add an account that you will run the miner on
+ 9. Reboot for change to take effect.
+  * Windows also tends to fragment memory a lot. If you are running on a system with 4-8GB of RAM you might need to switch off all the auto-start applications and reboot to have a large enough chunk of contiguous memory.
 
 ### Oneways, cpu affinity.
 

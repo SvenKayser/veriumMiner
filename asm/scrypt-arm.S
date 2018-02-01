@@ -585,7 +585,7 @@ scrypt_core_loop2:
 #endif
 
 
-#ifdef __ARM_NEON__
+#ifdef __ARM_NEON
 
 .macro salsa8_core_3way_doubleround
 	ldrd	r6, [sp, #6*4]
@@ -1180,6 +1180,6 @@ scrypt_core_3way_loop2:
 	vpop	{q4-q7}
 	ldmfd	sp!, {r4-r11, pc}
 
-#endif /* __ARM_NEON__ */
+#endif /* __ARM_NEON */
 
 #endif
